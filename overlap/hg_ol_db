@@ -1,0 +1,3 @@
+#!/bin/bash
+perl hg_ol_db.pl config.txt > hg_ol_db.log 2>&1
+times

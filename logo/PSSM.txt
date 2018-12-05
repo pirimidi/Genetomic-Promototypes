@@ -1,0 +1,3 @@
+A position weight matrix (PWM), also called position-specific weight matrix (PSWM) or position-specific scoring matrix (PSSM), is a commonly used representation of motifs (patterns) in biological sequences.
+
+A PWM is a matrix of score values that gives a weighted match to any given substring of fixed length. It has one row for each symbol of the alphabet, and one column for each position in the pattern. PWM score is defined as \sum_{j=1}^{N}{m_{i(j),j}}, where j represents position in the substring, i(j) is the symbol at position j in the substring, and mi,j is the score in row i, column j of the matrix. In other words, a PWM score is the sum of position-specific scores for each symbol in the substring.
