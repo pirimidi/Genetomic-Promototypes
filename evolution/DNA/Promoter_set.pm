@@ -1,0 +1,403 @@
+#-------------------------------------------------------------------------
+# Author: Mirko Palla.
+# Date: July 12, 2006.
+# For: Task 6 at the Church Lab - Genetics Department, 
+# Harvard Medical School.
+# 
+# Purpose: This program contains the complete code for 
+# class Promoter_set, modeling a set of promoters in Perl.
+#
+# Associated subroutines: 0. &constructor           1. &get_orthogroups
+#			  2. &get_comp_table        3. &create_table
+#			  4. &all_tf_list_promoter  5. &relative_distance 
+#			  6. &distance_to_gene
+#------------------------------------------------------------------------- 
+
+package DNA::Promoter_set;
+
+use strict;
+use base ("DNA::Promoter", "DNA::Fact_list", "DNA::TF_pair", "DNA::IO");
+
+1;
+
+#--------------------------------- Class Promoter_set -------------------------------------
+
+# 0. constructor for promoter set object.
+
+sub new {
+  my($class, $gene, $prom) = @_;
+  my($self)={};
+
+  $self->{gene} = $gene;		 		        # Query gene field.
+  $self->{promoter} = $prom; 				        # Equivalent promoter field.
+
+  $self->{ortho_groups} = [];					# List of orthologous promoters.
+  $self->{promoter_set} = {};                                   # Promoter set (by some rule).
+  $self->{factors_list} = {};					# List of TFBS set of promoters.
+  $self->{ortho_table} = [];					# TF occurence table of yeast species.
+  $self->{tf_pair_list} = {};					# All TF pairs in promoter.
+  $self->{tf_gene_dist} = [];					# List of TF-gene distance in promoter.
+
+  $self->{parameters} = {};                                     # Input parameters.
+  $self->{bar_code} = ();                                       # Bar code field to 
+  			                                        # label output files.
+  bless($self,$class);
+  return($self);
+}
+
+#------------------------------ Get_orthogroups sub. ----------------------------------
+
+# 1. &get_orthogroups subroutine to retrieve orthogroups of given gene entry of 'cer'.
+                                                                          
+sub get_orthogroups() {
+  my($self) = shift;
+
+  my($gene) = $self->{gene}; 	 		               # Query gene of interest.
+  my($prom) = $self->{promoter}; 		               # Query promoter of interest.
+
+  my($base_dir) = $self->{parameters}{Base_dir};	       # Get base directory.
+  my($comp_file) = $self->{parameters}{Filtered_orthogroups};  # Get orthogroup file name. 
+
+  chdir $base_dir;
+  open(INFO, $comp_file) || die "--> Cannot open orthogroups file -> $comp_file\n";          
+ 
+  my($num);
+  my($marker)=0;
+
+  while (<INFO>) {
+    my(@ortho) = split(/\t/, $_);              # Put line member strings into an array, @ortho.
+
+    if ($ortho[1] eq $gene || $ortho[1] eq $prom) { 
+      $num = scalar @ortho;
+
+      $marker=1; 
+      @{ $self->{ortho_groups} } = @ortho; 
+    }   
+  }
+  close INFO;
+
+  if ($marker!=1) { return 1; }		       # Promoter not present in orthogroup file.
+  elsif ($num<=4) { return 2; }	      	       # In orthogroup file, but no other orthologous promoters in any yeast organism. 	  
+  else { return 0; }
+}
+
+#------------------------------- Get_comp_table sub. ----------------------------------
+
+# 2. &get_comp_table subroutine to construct table of comparative analysis for ortho-
+# groups of given 'cer' gene entry.
+                                                                          
+sub get_comp_table() {
+  my($self) = shift;
+
+  my(%valid_data) = %{ $self->{parameters} };             # Get parameter hash.
+  my(@ortho_groups) = @{ $self->{ortho_groups} };
+
+  my($max_iter) = scalar @ortho_groups;
+
+  for (my $index=2; $index<$max_iter; $index++) {
+    my($org_prom) = $ortho_groups[$index]; 
+
+    my(@o_p_s) = split(/\,/, $org_prom);
+    
+    foreach my $o_p (@o_p_s) {
+      my(@org_prom) = split(/\|/, $o_p);
+      my($org) = $org_prom[0];				 # Parse out organism name.
+
+      if ($org =~ /gos|wal|pom|par|mik|bay/) { next; }
+
+      my($gene, $prom);
+      my($prom_obj, $factors);
+
+      #-------- Case I: S. cerevisiae --------
+
+      if ($org eq "cer") {
+        $prom = $org_prom[1];
+
+        my($base_dir) = $valid_data{Base_dir};	 	 # Get base directory.
+        my($c_file) = $valid_data{Conv_file};            # Get conversion file.
+        $gene = &DNA::Func::promoter_to_gene($prom, 
+		               $c_file, $base_dir);
+
+        $prom_obj = new DNA::Promoter($gene, $prom);     # Create promoter object.
+        %{ $prom_obj->{parameters} } = %valid_data;	 # Assign input data to prom_obj.
+
+        $prom_obj->{organism} = $org;
+        $prom_obj->promoter_search();		         # Retrieve promoter sequence.
+
+        $factors = new DNA::Fact_list($prom_obj);	 # Create Fact_list object.
+        %{ $factors->{parameters} } = %valid_data;	 # Assign input data to factors.
+
+        $factors->TF_search(1);		                 # Retrieve all TFs bound to given promoter.
+      }
+
+      #------ Case II: Other yeast species ------
+
+      else { 
+        my($file);				         # Promoter file of yeast species.
+
+        if ($org =~ /alb|cas|gos|wal|pom|par|mik|bay/) { 
+          $gene = "NDEF"; 
+
+          my(@prom) = split(/\-/, $org_prom[1]);
+          if (defined $prom[1]) { $prom = $prom[1]; }
+          else { $prom = $prom[0]; };    		 # Parse out promoter name.
+
+          if ($org =~ /cas/) { 
+            my($end) = substr($prom, -1);
+            if ($end =~ /\D/) { chop $prom; } 
+          }
+        }
+        elsif ($org =~ /gla|han|lac|lip/) { 
+          $gene = $org_prom[1];
+
+          my($dir) = $valid_data{Aliases};     		 # Pull out converstion file data.
+          $file = &DNA::Func::get_org_file($dir, $org);
+
+          open(ALIAS, $file) || die "--> Cannot open file list: $file!\n"; 
+
+          my($marker);
+          A: while (<ALIAS>) {			
+            my(@line) = split(/\t/, $_);		 # Parse out corresponding promoter.
+
+            chomp $line[1];
+            if($gene eq $line[1]) { $prom = $line[0]; 
+              $marker=1; last A; 
+            } 
+          }  
+          close ALIAS;     
+
+          if ($marker!=1) { $prom = $gene; }    
+        }	
+
+        $prom_obj = new DNA::Promoter($gene, $prom);     # Create promoter object.
+        %{ $prom_obj->{parameters} } = %valid_data;	 # Assign input data to prom_obj.
+
+        $prom_obj->{organism} = $org;
+        $prom_obj->o_promoter_search();		         # Retrieve promoter sequence.
+
+        $factors = new DNA::Fact_list($prom_obj);	 # Create Fact_list object.
+        %{ $factors->{parameters} } = %valid_data;	 # Assign input data to factors.
+        
+        if ( !(defined $prom_obj->{no_eq}) ) {
+          $factors->o_TF_search(1);
+        }     
+      }	
+
+      if ( !(defined $prom_obj->{no_eq}) ) {
+        $factors->count_TF_occurence();			 # Count TF occurence for each list.
+      }
+
+      push @{ $self->{factors_list}{$org} }, $factors;
+    }
+  }        
+}
+
+#--------------------------------- Create_table sub. ----------------------------------
+
+# 3. &create_table subroutine to record TFBS occurences in a specified S. cerevisiae 
+# promoter and in orthologous promoters of other yeast species sorted by chronogolical 
+# order according to the phylogenetic tree derived.
+
+sub create_table() {
+  my($self) = shift;
+
+  my(@phylo_tree) = ('cer', 'par', 'mik', 'bay', 'gla', 	    # Pholygenic tree of different yeast species
+		     'cas', 'lac', 'han', 'alb', 'lip');	    # in chronological order.
+
+  my($cer_list) = $self->{factors_list}{'cer'}[0];
+  my(%cer_occu) = %{ $cer_list->{tf_occurence} };
+  my(@cer_TFs) = sort keys %cer_occu;				    # List of 'cer' TFs of requested gene (promoter).
+
+  my(@table);
+  my($org_header);
+
+  my(@curr_fact);
+
+  foreach my $org (@phylo_tree) {				    # Create header (list of yeast organisms) as present in orthology group.			
+    if (exists $self->{factors_list}{$org}) {
+      foreach my $factors ( @{ $self->{factors_list}{$org} } ) {
+        if ( !(defined $factors->{prom_obj}->{no_eq}) ) {
+
+          my($prom) = $factors->{prom_obj}->{promoter};
+          my($org_prom) = $org.'|'.$prom;
+          
+          $org_header = $org_header.$org_prom."\t";
+
+          push @curr_fact, $factors;				    # Keep track of TF list (of promoter) of orthogroup.
+        }
+        else { print "\n--> No data for org: $org <=> prom: $factors->{prom_obj}->{no_eq}"; }
+      }
+    }
+  }
+  chop $org_header;
+  push @table, "\n[TFs]\t".$org_header;			    	    # Assign 'header' to the first row of comparison table.
+
+  foreach my $tf (@cer_TFs) {					    # Iterate through only the existing organisms.
+
+    my($o_line) = "$tf\t\t";
+    foreach my $factors (@curr_fact) {  
+  
+      my($o);							    # Create list of TF occurence for each promoter. 
+      if (defined $factors->{tf_occurence}->{$tf}) {
+        $o = $factors->{tf_occurence}->{$tf};
+      }
+      else { $o = '-'; }
+         
+      $o_line = $o_line.$o."\t\t";
+    }
+    chop $o_line;
+    push @table, $o_line;					    # If row completed store it in table array lineraly.	
+  }
+  @{ $self->{ortho_table} } = @table;			            # Assign TF occurence table to storage.
+}
+
+#-------------------------------- All_tf_list_promoter sub. ---------------------------
+
+# 4. &all_tf_list_promoter collect all promoter objects with bound TF list in S. cere-
+# visiae into a library.
+                                                                                        
+sub all_tf_list_promoter() {
+  my($self) = shift;
+  
+  my($dir) = $self->{parameters}{Base_dir};
+  my(%valid_data) = %{ $self->{parameters} };
+
+  my($c_file) = $self->{parameters}{Conv_file};
+  my($prom_file) = $self->{parameters}{Prom_file};
+
+  chdir $dir;
+
+  my($marker);
+  open(INFO, $prom_file) || die "--> Cannot open promoter file -> $prom_file\n";          
+ 
+  my($end);
+  while (<INFO>) {
+
+      #----- Promoter object retrieval -----
+
+      my($prom_obj) = new DNA::Promoter();       # Create Promoter object.
+
+      my(@prom) = split(/\s/, $_);               # Put line member strings into an array, @prom.
+      chomp($prom_obj->{prom_seq} = $prom[4]);   # Parse out promoter sequence and assign to Promoter object.
+
+      $marker=1;			         # Mark existance of such Promoter.
+
+      my(@name) = split(/\s/, $prom[0]);
+      my($prom_name) = substr($name[0],1);
+
+      $prom_obj->{promoter} = $prom_name;
+      $prom_obj->{gene} = &DNA::Func::promoter_to_gene($prom_name, $c_file, $dir);
+
+      $end = substr($prom_name,6,1);             # Get promoter end: W|C.
+
+      if ($end eq 'W' || $end eq 'C') {
+        $prom_obj->{strand} = $end;		 # Assign strand value to promoter.
+      }
+      else { $prom_obj->{strand} = 'M'; }	 # Mitochondrial chromosome.
+      
+      my(@range) = split(/\D/, $prom[3]);
+      
+      chop $prom[2];
+      $prom_obj->{chromosome} = $prom[2];        # Assign chromosome no.     
+
+      $prom_obj->{prom_start} = $range[1];       # Assign global range.
+      $prom_obj->{prom_end} = $range[2];
+
+      #------ Bound TF list retrieval ------
+
+      my($factors) = new DNA::Fact_list($prom_obj);  # Create Fact_list object.
+      %{ $factors->{parameters} } = %valid_data;     # Assign input data to factors.
+
+      $factors->TF_search();		 	     # Retrieve all TFs bound to given promoter.
+
+      $self->{factors_list}{$prom_name} = $factors;  # Assign TF list (with promoter object) to library. 
+  }
+  close INFO;
+}
+
+#-------------------------------- Relative_distance sub. ------------------------------
+
+# 5. &relative_distance subroutine to get statistics on relative distance and orien-
+# tation of TF pairs in all promoters in S. cerevisiae.
+
+sub relative_distance() {
+  my($self) = shift;
+
+  foreach my $prom_name (keys %{ $self->{factors_list} }) {
+
+    my($fact_list) = $self->{factors_list}{$prom_name};		# Retrieve TF list of each promoter.
+    my($prom_obj) = $fact_list->{prom_obj};			# Retrieve promoter object.
+
+    my($strand) = $prom_obj->{strand};				# Get strand type,
+    my($chrom) = $prom_obj->{chromosome};		        # Chromosome number of current promoter.
+
+    my(@ordered_list) = @{ $fact_list->{final_list} };		# Get TF list ordered by increasing offset.
+
+    for (my $i=0; $i<@ordered_list; $i++) {			# Create all TF pairs in promoter.
+      my($base_TF) = $ordered_list[$i];				# Fixed TF in list, base of comparision.
+
+      for (my $j=0; $j<@ordered_list; $j++) {
+
+        if ($i==$j) { next; }					# If same TF, skip to next iteration.
+        else {
+          my($comp_TF) = $ordered_list[$j];			# TF of iterative comparision.
+
+          my($TF_pair);						# Declare "empty" TF pair.
+          
+          if ($strand eq 'W' || $strand eq 'M') {
+            $TF_pair = new DNA::TF_pair($base_TF, $comp_TF);    # Assign order depending on strand.
+          }
+          elsif ($strand eq 'C') {
+            $TF_pair = new DNA::TF_pair($comp_TF, $base_TF);
+          }
+          else { die "\n--> Error: no such strand - $strand\n\n"; }
+
+          $TF_pair->{strand} = $strand;				# Label TF pair strand.
+          $TF_pair->{promoter} = $prom_name;			# Label TF pair with promoter name.
+          $TF_pair->{chromosome} = $chrom;			# Label TF pair with chromosome number.
+
+          $TF_pair->orient_type();				# Assign orientation of TF pair.
+          $TF_pair->calculate_dist();				# Calculate relative distance of TFs.
+
+          push @{ $self->{tf_pair_list}{$prom_name} }, $TF_pair;
+        }
+      }  
+    }
+  }
+}
+
+#-------------------------------- Distance_to_gene sub. ------------------------------
+
+# 6. &distance_to_gene subroutine to get statistics on distance to gene start of TFs
+# in all promoters in S. cerevisiae.
+
+sub distance_to_gene() {
+  my($self) = shift;
+
+  foreach my $prom_name (keys %{ $self->{factors_list} }) {
+
+    my($fact_list) = $self->{factors_list}{$prom_name};		# Retrieve TF list of each promoter.
+    my($prom_obj) = $fact_list->{prom_obj};			# Retrieve promoter object.
+
+    my($strand) = $prom_obj->{strand};				# Get strand type,
+    my($p_length) = length $prom_obj->{prom_seq};      		# promoter sequence length.
+
+    my(@ordered_list) = @{ $fact_list->{final_list} };		# Get TF list ordered by increasing offset.
+
+    for (my $i=0; $i<@ordered_list; $i++) {			# Create all TF pairs in promoter.
+      my($base_TF) = $ordered_list[$i];				# Fixed TF in list, base of comparision.
+
+      my($distance);						# (Shortest) distance from TF to gene start.
+      my($offset) = $base_TF->{offset};			        # Relative offset of TF (from left of sequence string).
+
+      if ($strand eq 'W' || $strand eq 'M') {
+        my($tf_length) = length $base_TF->{motif}; 		# Get length of motif.
+	
+        $distance = $p_length - ($offset + $tf_length);		# Calculate TF-to-gene distance for 'W'.
+      }
+      else { $distance = $offset; }				# Calculate TF-to-gene distance for 'C'.
+
+      push @{ $self->{tf_gene_dist}{$prom_name} }, $distance;	
+    }
+  }
+}

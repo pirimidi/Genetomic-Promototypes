@@ -1,0 +1,4 @@
+glabrata_utr5_1000.seq
+hansenii_utr5_1000.seq
+lactis_utr5_1000.seq
+lipolytica_utr5_1000.seq
